@@ -237,7 +237,7 @@ export async function answerFollowUp(
   const response = await client.responses.create({
     model: env.openaiModel,
     instructions:
-      "You answer follow-up questions for CryptoBrief. Use only supplied live SoSoValue, SoSoValue Index, token unlock, and SoDEX context. Be concise, cite which asset/news/ETF/index/unlock/macro signal you are using, and avoid pretending a trade can be executed without a connected SoDEX wallet and signed order.",
+      "You answer follow-up questions for CryptoBrief. Use only supplied live SoSoValue, SoSoValue Index, token unlock, and SoDEX context. Be concise and cite which asset, news, ETF, index, unlock, or macro signal you are using. Format as clean plain text for a web chat: no Markdown symbols, no emoji, no tables, no bullet characters. For SoDEX, never say an unsigned order can be placed or executed. Say CryptoBrief can preview an unsigned order and the user must connect a wallet and sign before SoDEX execution.",
     input: JSON.stringify({
       question,
       previousBriefing,

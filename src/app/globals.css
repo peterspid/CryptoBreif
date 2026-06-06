@@ -211,6 +211,16 @@ select:focus-visible {
   box-shadow: 0 0 18px rgba(41, 211, 145, 0.8);
 }
 
+.status-dot.muted-dot {
+  background: rgba(247, 244, 238, 0.34);
+  box-shadow: none;
+}
+
+.status-dot.warn-dot {
+  background: var(--amber);
+  box-shadow: 0 0 16px rgba(240, 184, 74, 0.58);
+}
+
 .briefing-panel,
 .data-panel {
   border: 1px solid var(--line);

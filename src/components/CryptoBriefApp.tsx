@@ -264,15 +264,31 @@ function formatPercent(value: number | string | undefined) {
 }
 
 function serviceLabel(value?: { ok?: boolean; configured?: boolean }) {
-  if (!value?.configured && value?.ok === false) {
-    return "Missing";
+  if (!value) {
+    return "Unknown";
   }
 
-  if (value?.ok || value?.configured) {
-    return value.ok === false ? "Check" : "Live";
+  if (value.configured === false) {
+    return "Not set";
   }
 
-  return "Ready";
+  if (value.ok === false) {
+    return "Check";
+  }
+
+  return value.ok ? "Live" : "Ready";
+}
+
+function serviceStatusClass(value?: { ok?: boolean; configured?: boolean }) {
+  if (!value || value.configured === false) {
+    return "status-dot muted-dot";
+  }
+
+  if (value.ok === false) {
+    return "status-dot warn-dot";
+  }
+
+  return "status-dot";
 }
 
 function cleanBriefingLine(line: string) {
@@ -757,7 +773,7 @@ export function CryptoBriefApp() {
               {["sosovalue", "ssi", "openai", "telegram", "email", "sodex"].map(
                 (service) => (
                   <span key={service}>
-                    <span className="status-dot" />
+                    <span className={serviceStatusClass(health?.services?.[service])} />
                     {serviceNames[service]}{" "}
                     {serviceLabel(health?.services?.[service])}
                   </span>
@@ -907,7 +923,7 @@ export function CryptoBriefApp() {
                 <input
                   value={telegramChatId}
                   onChange={(event) => setTelegramChatId(event.target.value)}
-                  placeholder="123456789"
+                  placeholder="Chat ID"
                 />
               </label>
               <label>
