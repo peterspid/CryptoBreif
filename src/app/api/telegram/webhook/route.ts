@@ -29,14 +29,12 @@ function parseBriefCommand(text: string) {
     holdings.push({ symbol, amount });
   }
 
+  if (holdings.length === 0) {
+    return undefined;
+  }
+
   return BriefingRequestSchema.parse({
-    holdings:
-      holdings.length > 0
-        ? holdings
-        : [
-            { symbol: "BTC", amount: 0.05 },
-            { symbol: "ETH", amount: 1.2 },
-          ],
+    holdings,
     deliveryTime: "07:00",
     timezone: env.scheduledBriefingTimezone,
     riskTolerance: "balanced",
@@ -46,6 +44,10 @@ function parseBriefCommand(text: string) {
 
 async function buildBriefingText(text: string) {
   const profile = parseBriefCommand(text);
+
+  if (!profile) {
+    return "Send /brief followed by your real portfolio pairs, for example: /brief SYMBOL AMOUNT SYMBOL AMOUNT.";
+  }
 
   try {
     const context = await buildMarketContext(profile);
@@ -104,7 +106,7 @@ export async function POST(request: Request) {
 
     if (/^\/start/i.test(text)) {
       await sendTelegramMessage(
-        "CryptoBrief is ready. Send /brief BTC 0.05 ETH 1.2 to generate a live portfolio brief.",
+        "CryptoBrief is ready. Send /brief followed by your real portfolio pairs to generate a live portfolio brief.",
         String(chatId),
       );
       return NextResponse.json({ ok: true });
@@ -124,7 +126,7 @@ export async function POST(request: Request) {
     }
 
     await sendTelegramMessage(
-      "Send /brief BTC 0.05 ETH 1.2 for a live morning brief.",
+      "Send /brief followed by your real portfolio pairs for a live morning brief.",
       String(chatId),
     );
 
