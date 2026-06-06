@@ -203,11 +203,8 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
 });
 
-const defaultHoldings: HoldingForm[] = [
-  { symbol: "BTC", amount: "0.05", costBasis: "" },
-  { symbol: "ETH", amount: "1.2", costBasis: "" },
-  { symbol: "SOL", amount: "18", costBasis: "" },
-];
+const emptyHolding: HoldingForm = { symbol: "", amount: "", costBasis: "" };
+const defaultHoldings: HoldingForm[] = [emptyHolding];
 
 const defaultDeliverySettings: DeliverySettings = {
   morning: true,
@@ -218,11 +215,11 @@ const defaultDeliverySettings: DeliverySettings = {
 };
 
 const defaultOrderForm: OrderForm = {
-  symbol: "BTC",
+  symbol: "",
   side: "BUY",
   type: "MARKET",
   quantity: "",
-  funds: "100",
+  funds: "",
   limitPrice: "",
   slippagePct: "0.75",
 };
@@ -419,6 +416,12 @@ export function CryptoBriefApp() {
 
   async function generateBriefing(event?: FormEvent) {
     event?.preventDefault();
+
+    if (payload.holdings.length === 0) {
+      setStatus("Add at least one portfolio asset before generating a briefing.");
+      return;
+    }
+
     setLoading(true);
     setStatus("Fetching live SoSoValue, SSI, and SoDEX data...");
     setAnswer("");
@@ -640,14 +643,23 @@ export function CryptoBriefApp() {
   }
 
   function removeHolding(index: number) {
-    setHoldings((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    setHoldings((current) => {
+      const next = current.filter((_, itemIndex) => itemIndex !== index);
+      return next.length > 0 ? next : [{ ...emptyHolding }];
+    });
   }
 
   function addHolding() {
-    setHoldings((current) => [
-      ...current,
-      { symbol: "", amount: "", costBasis: "" },
-    ]);
+    setHoldings((current) => [...current, { ...emptyHolding }]);
+  }
+
+  function clearHoldings() {
+    setHoldings([{ ...emptyHolding }]);
+    setBriefing(null);
+    setOrderPreview(null);
+    setAnswer("");
+    setLastQuestion("");
+    setStatus("Portfolio inputs cleared.");
   }
 
   function saveDeliverySettings() {
