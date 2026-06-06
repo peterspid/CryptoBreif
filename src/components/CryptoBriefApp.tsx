@@ -4,14 +4,19 @@ import Image from "next/image";
 import {
   Activity,
   Bell,
+  CalendarClock,
+  CheckCircle2,
   Clock,
+  Copy,
   ExternalLink,
+  Mail,
   MessageCircle,
   Plus,
   Radio,
   RefreshCw,
   Send,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   Wallet,
   Zap,
@@ -22,6 +27,24 @@ type HoldingForm = {
   symbol: string;
   amount: string;
   costBasis: string;
+};
+
+type DeliverySettings = {
+  morning: boolean;
+  evening: boolean;
+  telegram: boolean;
+  email: boolean;
+  emailTo: string;
+};
+
+type OrderForm = {
+  symbol: string;
+  side: "BUY" | "SELL";
+  type: "MARKET" | "LIMIT";
+  quantity: string;
+  funds: string;
+  limitPrice: string;
+  slippagePct: string;
 };
 
 type BriefingResponse = {
@@ -52,6 +75,8 @@ type BriefingResponse = {
         changeUsd24h: number;
         icon?: string;
         sectors: string[];
+        dataSource: "sosovalue" | "sodex" | "unpriced";
+        sourceSymbol?: string;
       }>;
     };
     news: Array<{
@@ -71,15 +96,65 @@ type BriefingResponse = {
       total_value_traded?: number;
       total_net_assets?: number;
     }>;
+    indexes: Array<{
+      ticker: string;
+      price: number;
+      changePct24h: number;
+      roi7d?: number;
+      ytd?: number;
+      matchedSymbols: string[];
+      matchedWeight: number;
+      constituents: Array<{ symbol: string; weight: number }>;
+    }>;
+    sodexActions: Array<{
+      symbol: string;
+      marketSymbol: string;
+      lastPrice: number;
+      changePct24h: number;
+      quoteVolume: number;
+      actionUrl: string;
+      status: "ready" | "unsigned";
+      note: string;
+    }>;
+    unlocks: Array<{
+      symbol: string;
+      unlocked?: number;
+      totalLocked?: number;
+      nextUnlocks: Array<{
+        symbol: string;
+        label: string;
+        amount: number;
+        unlockAt: string;
+        daysUntil: number;
+      }>;
+    }>;
     macroEvents: Array<{ date: string; events: string[] }>;
     warnings: string[];
   };
 };
 
+type HistoryItem = {
+  id: string;
+  headline: string;
+  text: string;
+  generatedAt: string;
+  valueUsd: number;
+  dataQuality: BriefingResponse["briefing"]["dataQuality"];
+  response?: BriefingResponse;
+};
+
 type HealthResponse = {
   services?: Record<
     string,
-    { ok?: boolean; configured?: boolean; model?: string; error?: string }
+    {
+      ok?: boolean;
+      configured?: boolean;
+      model?: string;
+      error?: string;
+      indexCount?: number;
+      marketCount?: number;
+      botUsername?: string;
+    }
   >;
 };
 
@@ -88,6 +163,26 @@ type SodexTicker = {
   lastPrice?: string;
   priceChangePercent?: string;
   quoteVolume?: string;
+};
+
+type ImportedHolding = {
+  symbol: string;
+  amount: number;
+  locked: number;
+  sourceCoin: string;
+};
+
+type OrderPreview = {
+  symbol: string;
+  marketSymbol: string;
+  side: "BUY" | "SELL";
+  type: "MARKET" | "LIMIT";
+  estimatedNotionalUsd: number;
+  slippagePct: number;
+  clOrdID: string;
+  requiresSignature: true;
+  endpoint: string;
+  warnings: string[];
 };
 
 const numberFormatter = new Intl.NumberFormat("en-US", {
@@ -101,18 +196,48 @@ const moneyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+const dateFormatter = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 const defaultHoldings: HoldingForm[] = [
   { symbol: "BTC", amount: "0.05", costBasis: "" },
   { symbol: "ETH", amount: "1.2", costBasis: "" },
   { symbol: "SOL", amount: "18", costBasis: "" },
 ];
 
+const defaultDeliverySettings: DeliverySettings = {
+  morning: true,
+  evening: false,
+  telegram: false,
+  email: false,
+  emailTo: "",
+};
+
+const defaultOrderForm: OrderForm = {
+  symbol: "BTC",
+  side: "BUY",
+  type: "MARKET",
+  quantity: "",
+  funds: "100",
+  limitPrice: "",
+  slippagePct: "0.75",
+};
+
 const serviceNames: Record<string, string> = {
   sosovalue: "SoSoValue",
+  ssi: "SSI",
   openai: "OpenAI",
   telegram: "Telegram",
+  email: "Email",
   sodex: "SoDEX",
 };
+
+const sodexAppUrl =
+  process.env.NEXT_PUBLIC_SODEX_APP_URL || "https://sodex.com";
 
 function formatMoney(value: number | string | undefined) {
   const parsed = Number(value ?? 0);
@@ -134,7 +259,7 @@ function serviceLabel(value?: { ok?: boolean; configured?: boolean }) {
   }
 
   if (value?.ok || value?.configured) {
-    return "Live";
+    return value.ok === false ? "Check" : "Live";
   }
 
   return "Ready";
@@ -150,6 +275,51 @@ function cleanBriefingLine(line: string) {
     .trim();
 }
 
+function holdingSourceLabel(source: "sosovalue" | "sodex" | "unpriced") {
+  if (source === "sosovalue") {
+    return "SoSoValue";
+  }
+
+  if (source === "sodex") {
+    return "SoDEX";
+  }
+
+  return "Unpriced";
+}
+
+function asHistoryItem(response: BriefingResponse): HistoryItem {
+  return {
+    id: response.context.generatedAt,
+    headline: response.briefing.headline,
+    text: response.briefing.text,
+    generatedAt: response.context.generatedAt,
+    valueUsd: response.context.portfolio.valueUsd,
+    dataQuality: response.briefing.dataQuality,
+    response,
+  };
+}
+
+function readStoredJson<T>(key: string, fallback: T): T {
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredJson<T>(key: string, value: T) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Storage can be blocked in private browsing or locked-down webviews.
+  }
+}
+
 export function CryptoBriefApp() {
   const [holdings, setHoldings] = useState<HoldingForm[]>(defaultHoldings);
   const [deliveryTime, setDeliveryTime] = useState("07:00");
@@ -157,14 +327,21 @@ export function CryptoBriefApp() {
     "conservative" | "balanced" | "aggressive"
   >("balanced");
   const [telegramChatId, setTelegramChatId] = useState("");
-  const [telegramHandle, setTelegramHandle] = useState("");
+  const [deliverySettings, setDeliverySettings] = useState<DeliverySettings>(
+    defaultDeliverySettings,
+  );
+  const [walletAddress, setWalletAddress] = useState("");
   const [briefing, setBriefing] = useState<BriefingResponse | null>(null);
+  const [history, setHistory] = useState<HistoryItem[]>([]);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [sodexTickers, setSodexTickers] = useState<SodexTicker[]>([]);
+  const [orderForm, setOrderForm] = useState<OrderForm>(defaultOrderForm);
+  const [orderPreview, setOrderPreview] = useState<OrderPreview | null>(null);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
 
   const timezone = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Calcutta",
@@ -172,16 +349,29 @@ export function CryptoBriefApp() {
   );
 
   useEffect(() => {
-    fetch("/api/health")
-      .then((response) => response.json())
-      .then(setHealth)
-      .catch(() => setHealth(null));
+    const timer = window.setTimeout(() => {
+      setDeliverySettings(
+        readStoredJson("cryptobrief-delivery", defaultDeliverySettings),
+      );
+      setHistory(readStoredJson("cryptobrief-history", []));
+      setHoldings(readStoredJson("cryptobrief-holdings", defaultHoldings));
+      setStorageReady(true);
+    }, 0);
+    refreshHealth();
 
     fetch("/api/sodex/markets")
       .then((response) => response.json())
       .then((payload) => setSodexTickers(payload.tickers ?? []))
       .catch(() => setSodexTickers([]));
+
+    return () => window.clearTimeout(timer);
   }, []);
+
+  useEffect(() => {
+    if (storageReady) {
+      writeStoredJson("cryptobrief-holdings", holdings);
+    }
+  }, [holdings, storageReady]);
 
   const payload = {
     holdings: holdings
@@ -194,15 +384,35 @@ export function CryptoBriefApp() {
     deliveryTime,
     timezone,
     telegramChatId,
-    telegramHandle,
     riskTolerance,
-    interests: ["etf", "news", "macro", "sodex"] as const,
+    interests: ["etf", "news", "macro", "sodex", "unlock"] as const,
   };
+
+  async function refreshHealth() {
+    fetch("/api/health")
+      .then((response) => response.json())
+      .then(setHealth)
+      .catch(() => setHealth(null));
+  }
+
+  function persistHistory(nextBriefing: BriefingResponse) {
+    const item = asHistoryItem(nextBriefing);
+
+    setHistory((current) => {
+      const next = [
+        item,
+        ...current.filter((entry) => entry.id !== item.id),
+      ].slice(0, 10);
+
+      writeStoredJson("cryptobrief-history", next);
+      return next;
+    });
+  }
 
   async function generateBriefing(event?: FormEvent) {
     event?.preventDefault();
     setLoading(true);
-    setStatus("Fetching live SoSoValue data...");
+    setStatus("Fetching live SoSoValue, SSI, and SoDEX data...");
     setAnswer("");
 
     try {
@@ -211,14 +421,15 @@ export function CryptoBriefApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data = await response.json();
+      const data = (await response.json()) as BriefingResponse & { error?: string };
 
       if (!response.ok || !data.ok) {
         throw new Error(data.error ?? "Briefing failed");
       }
 
       setBriefing(data);
-      setStatus("Briefing generated from live market data.");
+      persistHistory(data);
+      setStatus("Briefing generated and saved to history.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Briefing failed");
     } finally {
@@ -226,33 +437,148 @@ export function CryptoBriefApp() {
     }
   }
 
-  async function sendTelegram() {
+  async function sendDelivery() {
     if (!briefing?.briefing.text) {
       setStatus("Generate a briefing first.");
       return;
     }
 
+    if (!deliverySettings.telegram && !deliverySettings.email) {
+      setStatus("Choose Telegram, email, or both before sending.");
+      return;
+    }
+
     setLoading(true);
-    setStatus("Sending Telegram briefing...");
+    setStatus("Sending configured delivery channels...");
 
     try {
-      const response = await fetch("/api/telegram/send", {
+      const response = await fetch("/api/delivery/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: briefing.briefing.text,
-          chatId: telegramChatId,
+          subject: briefing.briefing.headline,
+          telegramChatId,
+          emailTo: deliverySettings.emailTo,
+          channels: {
+            telegram: deliverySettings.telegram,
+            email: deliverySettings.email,
+          },
         }),
       });
       const data = await response.json();
 
       if (!response.ok || !data.ok) {
-        throw new Error(data.error ?? "Telegram send failed");
+        const failed =
+          data.results
+            ?.filter((result: { ok: boolean }) => !result.ok)
+            .map((result: { channel: string; error?: string }) =>
+              `${result.channel}: ${result.error}`,
+            )
+            .join("; ") ?? data.error;
+        throw new Error(failed ?? "Delivery failed");
       }
 
-      setStatus("Telegram briefing sent.");
+      setStatus("Delivery sent.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Telegram send failed");
+      setStatus(error instanceof Error ? error.message : "Delivery failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function connectWallet() {
+    const wallet = (
+      window as Window & {
+        ethereum?: { request: (args: { method: string }) => Promise<string[]> };
+      }
+    ).ethereum;
+
+    if (!wallet) {
+      setStatus("No browser wallet was detected.");
+      return;
+    }
+
+    try {
+      const accounts = await wallet.request({ method: "eth_requestAccounts" });
+      setWalletAddress(accounts[0] ?? "");
+      setStatus("Wallet connected.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Wallet connect failed");
+    }
+  }
+
+  async function importWallet() {
+    if (!walletAddress.trim()) {
+      setStatus("Enter or connect a wallet first.");
+      return;
+    }
+
+    setLoading(true);
+    setStatus("Importing SoDEX spot balances...");
+
+    try {
+      const response = await fetch("/api/sodex/wallet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: walletAddress }),
+      });
+      const data = (await response.json()) as {
+        ok: boolean;
+        holdings?: ImportedHolding[];
+        error?: string;
+      };
+
+      if (!response.ok || !data.ok) {
+        throw new Error(data.error ?? "Wallet import failed");
+      }
+
+      if (!data.holdings?.length) {
+        setStatus("No non-zero SoDEX balances found for this wallet.");
+        return;
+      }
+
+      setHoldings(
+        data.holdings.map((holding) => ({
+          symbol: holding.symbol,
+          amount: String(holding.amount),
+          costBasis: "",
+        })),
+      );
+      setStatus("Wallet balances imported.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Wallet import failed");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function previewSodexOrder(event: FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    setOrderPreview(null);
+    setStatus("Building SoDEX signed-order preview...");
+
+    try {
+      const response = await fetch("/api/sodex/order-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(orderForm),
+      });
+      const data = (await response.json()) as {
+        ok: boolean;
+        preview?: OrderPreview;
+        error?: string;
+      };
+
+      if (!response.ok || !data.ok || !data.preview) {
+        throw new Error(data.error ?? "Order preview failed");
+      }
+
+      setOrderPreview(data.preview);
+      setStatus("SoDEX preview is ready for wallet signing.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Order preview failed");
     } finally {
       setLoading(false);
     }
@@ -312,15 +638,63 @@ export function CryptoBriefApp() {
     ]);
   }
 
-  const heroNewsImage =
-    briefing?.context.news.find((item) => item.feature_image)?.feature_image ??
-    "/briefing-signal.png";
+  function saveDeliverySettings() {
+    writeStoredJson("cryptobrief-delivery", deliverySettings);
+    setStatus("Notification controls saved locally. Server cron uses env settings.");
+  }
+
+  function restoreHistoryItem(item: HistoryItem) {
+    if (item.response) {
+      setBriefing(item.response);
+      setStatus("History item loaded.");
+      return;
+    }
+
+    setBriefing({
+      ok: true,
+      briefing: {
+        headline: item.headline,
+        text: item.text,
+        portfolioLine: "",
+        watch: "",
+        brightSpot: "",
+        suggestion: "",
+        dataQuality: item.dataQuality,
+        aiStatus: "fallback",
+      },
+      context: {
+        generatedAt: item.generatedAt,
+        portfolio: {
+          valueUsd: item.valueUsd,
+          changeUsd24h: 0,
+          changePct24h: 0,
+          holdings: [],
+        },
+        news: [],
+        etfs: [],
+        indexes: [],
+        sodexActions: [],
+        unlocks: [],
+        macroEvents: [],
+        warnings: ["Loaded from local briefing history."],
+      },
+    });
+    setStatus("History item loaded.");
+  }
+
+  function clearHistory() {
+    setHistory([]);
+    window.localStorage.removeItem("cryptobrief-history");
+    setStatus("Local briefing history cleared.");
+  }
+
+  const firstSodexAction = briefing?.context.sodexActions[0];
 
   return (
     <main className="app-shell">
-      <section className="hero-section">
+      <section className="hero-section" id="compose">
         <Image
-          src={heroNewsImage}
+          src="/briefing-signal.png"
           alt=""
           fill
           priority
@@ -332,31 +706,47 @@ export function CryptoBriefApp() {
           <div className="brand-stack">
             <div className="signal-pill">
               <Radio size={16} />
-              <span>SoSoValue live signal</span>
+              <span>SoSoValue + SSI + SoDEX</span>
             </div>
-            <h1>CryptoBreif</h1>
-            <p>Morning brief for the money you actually hold.</p>
-            <div className="service-strip" aria-label="service status">
-              {["sosovalue", "openai", "telegram", "sodex"].map((service) => (
-                <span key={service}>
-                  <span className="status-dot" />
-                  {serviceNames[service]} {serviceLabel(health?.services?.[service])}
-                </span>
+            <h1>CryptoBrief</h1>
+            <p>Morning intelligence for the portfolio you actually hold.</p>
+            <nav className="workflow-nav" aria-label="workflow">
+              {[
+                ["#compose", "Compose"],
+                ["#briefing", "Brief"],
+                ["#report", "Report"],
+                ["#automations", "Automations"],
+                ["#history", "History"],
+              ].map(([href, label]) => (
+                <a href={href} key={href}>
+                  {label}
+                </a>
               ))}
+            </nav>
+            <div className="service-strip" aria-label="service status">
+              {["sosovalue", "ssi", "openai", "telegram", "email", "sodex"].map(
+                (service) => (
+                  <span key={service}>
+                    <span className="status-dot" />
+                    {serviceNames[service]}{" "}
+                    {serviceLabel(health?.services?.[service])}
+                  </span>
+                ),
+              )}
             </div>
           </div>
 
           <form className="briefing-panel" onSubmit={generateBriefing}>
             <div className="panel-head">
               <div>
-                <p className="eyebrow">Wave 1 demo</p>
-                <h2>Build today&apos;s briefing</h2>
+                <p className="eyebrow">Wave 2 console</p>
+                <h2>Build today&apos;s brief</h2>
               </div>
               <button
                 className="icon-button"
                 type="button"
                 title="Refresh service status"
-                onClick={() => window.location.reload()}
+                onClick={refreshHealth}
               >
                 <RefreshCw size={18} />
               </button>
@@ -405,10 +795,49 @@ export function CryptoBriefApp() {
               ))}
             </div>
 
-            <button className="text-button" type="button" onClick={addHolding}>
-              <Plus size={17} />
-              Add asset
-            </button>
+            <div className="inline-actions">
+              <button className="text-button" type="button" onClick={addHolding}>
+                <Plus size={17} />
+                Add asset
+              </button>
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => setHoldings(defaultHoldings)}
+              >
+                <RefreshCw size={16} />
+                Reset sample
+              </button>
+            </div>
+
+            <div className="wallet-import">
+              <label>
+                <Wallet size={15} />
+                <span>Wallet</span>
+                <input
+                  value={walletAddress}
+                  onChange={(event) => setWalletAddress(event.target.value)}
+                  placeholder="0x..."
+                />
+              </label>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={connectWallet}
+              >
+                <Wallet size={16} />
+                Connect
+              </button>
+              <button
+                className="secondary-button"
+                disabled={loading}
+                type="button"
+                onClick={importWallet}
+              >
+                <Activity size={16} />
+                Import SoDEX
+              </button>
+            </div>
 
             <div className="field-grid">
               <label>
@@ -453,11 +882,10 @@ export function CryptoBriefApp() {
               </label>
               <label>
                 <Wallet size={15} />
-                <span>Handle</span>
+                <span>Timezone</span>
                 <input
-                  value={telegramHandle}
-                  onChange={(event) => setTelegramHandle(event.target.value)}
-                  placeholder="@you"
+                  value={timezone}
+                  readOnly
                 />
               </label>
             </div>
@@ -470,11 +898,11 @@ export function CryptoBriefApp() {
               <button
                 className="secondary-button"
                 disabled={loading || !briefing}
-                onClick={sendTelegram}
+                onClick={sendDelivery}
                 type="button"
               >
                 <Send size={17} />
-                Send Telegram
+                Send channels
               </button>
             </div>
             <p className="status-line">{status || "Ready for live data."}</p>
@@ -487,17 +915,40 @@ export function CryptoBriefApp() {
           <p className="eyebrow">Live preview</p>
           <h2>{briefing?.briefing.headline ?? "Your briefing appears here"}</h2>
           <div className="briefing-message">
-            {(briefing?.briefing.text ?? "Generate a briefing to pull live prices, news, ETF flows, macro events, and SoDEX markets.").split(
-              "\n",
-            ).map((line, index) => {
-              const cleanLine = cleanBriefingLine(line);
+            {(briefing?.briefing.text ??
+              "Generate a briefing to pull live prices, news, ETF flows, SSI indexes, token unlocks, macro events, and SoDEX action readiness.")
+              .split("\n")
+              .map((line, index) => {
+                const cleanLine = cleanBriefingLine(line);
 
-              return cleanLine ? (
-                <p key={`${cleanLine}-${index}`}>{cleanLine}</p>
-              ) : (
-                <br key={index} />
-              );
-            })}
+                return cleanLine ? (
+                  <p key={`${cleanLine}-${index}`}>{cleanLine}</p>
+                ) : (
+                  <br key={index} />
+                );
+              })}
+          </div>
+          <div className="inline-actions">
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={!briefing}
+              onClick={() => {
+                if (briefing) {
+                  navigator.clipboard
+                    .writeText(briefing.briefing.text)
+                    .then(() => setStatus("Briefing copied."))
+                    .catch(() => setStatus("Clipboard is unavailable."));
+                }
+              }}
+            >
+              <Copy size={16} />
+              Copy
+            </button>
+            <a className="secondary-button" href="#report">
+              <ExternalLink size={16} />
+              Report
+            </a>
           </div>
           {briefing?.context.warnings.length ? (
             <div className="warning-line">
@@ -542,7 +993,7 @@ export function CryptoBriefApp() {
         </div>
       </section>
 
-      <section className="report-section">
+      <section className="report-section" id="report">
         <div className="section-head">
           <div>
             <p className="eyebrow">Full report</p>
@@ -550,12 +1001,12 @@ export function CryptoBriefApp() {
           </div>
           <a
             className="secondary-button link-button"
-            href="https://sodex.com"
+            href={firstSodexAction?.actionUrl ?? sodexAppUrl}
             target="_blank"
             rel="noreferrer"
           >
             <ExternalLink size={16} />
-            Act on SoDEX
+            SoDEX
           </a>
         </div>
 
@@ -576,6 +1027,7 @@ export function CryptoBriefApp() {
                   >
                     {formatPercent(holding.changePct24h)}
                   </strong>
+                  <span>{holdingSourceLabel(holding.dataSource)}</span>
                 </div>
               ))}
               {!briefing ? <p className="muted">No live report yet.</p> : null}
@@ -584,20 +1036,50 @@ export function CryptoBriefApp() {
 
           <div className="data-panel">
             <div className="panel-head tight">
-              <h3>SoDEX testnet markets</h3>
-              <Zap size={17} />
+              <h3>SSI index match</h3>
+              <Radio size={17} />
             </div>
-            <div className="ticker-list">
-              {sodexTickers.slice(0, 6).map((ticker) => (
-                <div className="ticker-row" key={ticker.symbol}>
-                  <span>{ticker.symbol}</span>
-                  <strong>{ticker.lastPrice ?? "n/a"}</strong>
-                  <em>{formatPercent(ticker.priceChangePercent)}</em>
+            <div className="signal-list">
+              {(briefing?.context.indexes ?? []).slice(0, 4).map((index) => (
+                <div className="signal-row" key={index.ticker}>
+                  <span>{index.ticker}</span>
+                  <strong>{formatPercent(index.changePct24h)}</strong>
+                  <em>
+                    {index.matchedSymbols.join(", ")}{" "}
+                    {formatPercent(index.matchedWeight * 100)}
+                  </em>
                 </div>
               ))}
-              {sodexTickers.length === 0 ? (
-                <p className="muted">SoDEX market feed is loading.</p>
+              {briefing && briefing.context.indexes.length === 0 ? (
+                <p className="muted">No SSI index matched this portfolio.</p>
               ) : null}
+              {!briefing ? <p className="muted">Indexes load after briefing.</p> : null}
+            </div>
+          </div>
+
+          <div className="data-panel">
+            <div className="panel-head tight">
+              <h3>Unlock calendar</h3>
+              <CalendarClock size={17} />
+            </div>
+            <div className="signal-list">
+              {(briefing?.context.unlocks ?? [])
+                .flatMap((summary) => summary.nextUnlocks)
+                .slice(0, 5)
+                .map((unlock) => (
+                  <div
+                    className="signal-row"
+                    key={`${unlock.symbol}-${unlock.unlockAt}-${unlock.label}`}
+                  >
+                    <span>{unlock.symbol}</span>
+                    <strong>{unlock.label}</strong>
+                    <em>{unlock.daysUntil}d</em>
+                  </div>
+                ))}
+              {briefing && briefing.context.unlocks.length === 0 ? (
+                <p className="muted">No near-term unlocks returned.</p>
+              ) : null}
+              {!briefing ? <p className="muted">Unlocks load after briefing.</p> : null}
             </div>
           </div>
 
@@ -615,8 +1097,9 @@ export function CryptoBriefApp() {
                   key={item.id}
                 >
                   <span>
-                    {item.matched_currencies?.map((currency) => currency.name).join(", ") ||
-                      "MARKET"}
+                    {item.matched_currencies
+                      ?.map((currency) => currency.name)
+                      .join(", ") || "MARKET"}
                   </span>
                   <strong>{item.title}</strong>
                 </a>
@@ -647,6 +1130,274 @@ export function CryptoBriefApp() {
               {!briefing ? <p className="muted">Signals load after briefing.</p> : null}
             </div>
           </div>
+
+          <div className="data-panel">
+            <div className="panel-head tight">
+              <h3>SoDEX preview</h3>
+              <Zap size={17} />
+            </div>
+            <div className="ticker-list">
+              {firstSodexAction ? (
+                <button
+                  className="ticker-row action-row-button"
+                  type="button"
+                  onClick={() =>
+                    setOrderForm((current) => ({
+                      ...current,
+                      symbol: firstSodexAction.symbol,
+                    }))
+                  }
+                >
+                  <span>{firstSodexAction.marketSymbol}</span>
+                  <strong>{formatMoney(firstSodexAction.lastPrice)}</strong>
+                  <em>Preview ready</em>
+                </button>
+              ) : (
+                sodexTickers.slice(0, 4).map((ticker) => (
+                  <div className="ticker-row" key={ticker.symbol}>
+                    <span>{ticker.symbol}</span>
+                    <strong>{ticker.lastPrice ?? "n/a"}</strong>
+                    <em>{formatPercent(ticker.priceChangePercent)}</em>
+                  </div>
+                ))
+              )}
+              <form className="order-form" onSubmit={previewSodexOrder}>
+                <select
+                  aria-label="Order side"
+                  value={orderForm.side}
+                  onChange={(event) =>
+                    setOrderForm((current) => ({
+                      ...current,
+                      side: event.target.value as "BUY" | "SELL",
+                      funds:
+                        event.target.value === "SELL" ? "" : current.funds,
+                    }))
+                  }
+                >
+                  <option value="BUY">Buy</option>
+                  <option value="SELL">Sell</option>
+                </select>
+                <select
+                  aria-label="Order type"
+                  value={orderForm.type}
+                  onChange={(event) =>
+                    setOrderForm((current) => {
+                      const type = event.target.value as "MARKET" | "LIMIT";
+
+                      return {
+                        ...current,
+                        type,
+                        funds: type === "LIMIT" ? "" : current.funds,
+                        limitPrice: type === "MARKET" ? "" : current.limitPrice,
+                      };
+                    })
+                  }
+                >
+                  <option value="MARKET">Market</option>
+                  <option value="LIMIT">Limit</option>
+                </select>
+                <input
+                  aria-label="Order asset symbol"
+                  value={orderForm.symbol}
+                  onChange={(event) =>
+                    setOrderForm((current) => ({
+                      ...current,
+                      symbol: event.target.value.toUpperCase(),
+                    }))
+                  }
+                  placeholder="BTC"
+                />
+                <input
+                  aria-label="Order quantity"
+                  value={orderForm.quantity}
+                  onChange={(event) =>
+                    setOrderForm((current) => {
+                      const quantity = event.target.value;
+
+                      return {
+                        ...current,
+                        quantity,
+                        funds: quantity ? "" : current.funds,
+                      };
+                    })
+                  }
+                  inputMode="decimal"
+                  placeholder="Qty"
+                />
+                <input
+                  aria-label="Order funds"
+                  value={orderForm.funds}
+                  onChange={(event) =>
+                    setOrderForm((current) => {
+                      const funds = event.target.value;
+
+                      return {
+                        ...current,
+                        funds,
+                        quantity: funds ? "" : current.quantity,
+                      };
+                    })
+                  }
+                  disabled={orderForm.type !== "MARKET" || orderForm.side !== "BUY"}
+                  inputMode="decimal"
+                  placeholder="USDC"
+                />
+                <input
+                  aria-label="Limit price"
+                  value={orderForm.limitPrice}
+                  onChange={(event) =>
+                    setOrderForm((current) => ({
+                      ...current,
+                      limitPrice: event.target.value,
+                    }))
+                  }
+                  disabled={orderForm.type !== "LIMIT"}
+                  inputMode="decimal"
+                  placeholder="Limit"
+                />
+                <input
+                  aria-label="Slippage percent"
+                  value={orderForm.slippagePct}
+                  onChange={(event) =>
+                    setOrderForm((current) => ({
+                      ...current,
+                      slippagePct: event.target.value,
+                    }))
+                  }
+                  inputMode="decimal"
+                  placeholder="Slip %"
+                />
+                <button className="secondary-button" disabled={loading} type="submit">
+                  <SlidersHorizontal size={16} />
+                  Preview
+                </button>
+              </form>
+              {orderPreview ? (
+                <div className="preview-note">
+                  <CheckCircle2 size={16} />
+                  <span>
+                    {orderPreview.marketSymbol} {orderPreview.side} preview,{" "}
+                    {formatMoney(orderPreview.estimatedNotionalUsd)}, signature
+                    required.
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="automation-section" id="automations">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Automations</p>
+            <h2>Delivery and notification controls</h2>
+          </div>
+          <button className="secondary-button" type="button" onClick={saveDeliverySettings}>
+            <CheckCircle2 size={16} />
+            Save
+          </button>
+        </div>
+        <div className="control-grid">
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={deliverySettings.morning}
+              onChange={(event) =>
+                setDeliverySettings((current) => ({
+                  ...current,
+                  morning: event.target.checked,
+                }))
+              }
+            />
+            <span>Morning brief</span>
+          </label>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={deliverySettings.evening}
+              onChange={(event) =>
+                setDeliverySettings((current) => ({
+                  ...current,
+                  evening: event.target.checked,
+                }))
+              }
+            />
+            <span>Evening check-in</span>
+          </label>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={deliverySettings.telegram}
+              onChange={(event) =>
+                setDeliverySettings((current) => ({
+                  ...current,
+                  telegram: event.target.checked,
+                }))
+              }
+            />
+            <span>Telegram</span>
+          </label>
+          <label className="toggle-row">
+            <input
+              type="checkbox"
+              checked={deliverySettings.email}
+              onChange={(event) =>
+                setDeliverySettings((current) => ({
+                  ...current,
+                  email: event.target.checked,
+                }))
+              }
+            />
+            <span>Email</span>
+          </label>
+          <label className="wide-field">
+            <Mail size={15} />
+            <span>Email recipient</span>
+            <input
+              value={deliverySettings.emailTo}
+              onChange={(event) =>
+                setDeliverySettings((current) => ({
+                  ...current,
+                  emailTo: event.target.value,
+                }))
+              }
+              placeholder="you@example.com"
+            />
+          </label>
+        </div>
+      </section>
+
+      <section className="history-section" id="history">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">History</p>
+            <h2>Recent briefings</h2>
+          </div>
+          <button
+            className="secondary-button link-button"
+            disabled={history.length === 0}
+            type="button"
+            onClick={clearHistory}
+          >
+            <Trash2 size={16} />
+            Clear
+          </button>
+        </div>
+        <div className="history-list">
+          {history.map((item) => (
+            <button
+              className="history-row"
+              key={item.id}
+              type="button"
+              onClick={() => restoreHistoryItem(item)}
+            >
+              <span>{dateFormatter.format(new Date(item.generatedAt))}</span>
+              <strong>{item.headline}</strong>
+              <em>{formatMoney(item.valueUsd)}</em>
+            </button>
+          ))}
+          {history.length === 0 ? <p className="muted">No saved briefings yet.</p> : null}
         </div>
       </section>
 

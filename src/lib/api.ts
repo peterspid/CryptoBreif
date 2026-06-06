@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { ConfigError } from "./env";
+import { publicErrorMessage } from "./errors";
 
 export function apiError(error: unknown) {
   if (error instanceof ZodError) {
@@ -13,17 +14,24 @@ export function apiError(error: unknown) {
     );
   }
 
+  const errorStatus =
+    error instanceof Error &&
+    "status" in error &&
+    typeof error.status === "number"
+      ? error.status
+      : undefined;
   const status =
-    error instanceof ConfigError
+    errorStatus ??
+    (error instanceof ConfigError
       ? error.status
       : error instanceof Error && error.message.includes("not configured")
         ? 500
-        : 502;
+        : 502);
 
   return NextResponse.json(
     {
       ok: false,
-      error: error instanceof Error ? error.message : "Unexpected API error",
+      error: publicErrorMessage(error, "Unexpected API error"),
     },
     { status },
   );

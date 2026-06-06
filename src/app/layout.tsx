@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CryptoBreif | AI Crypto Morning Briefing",
+  title: "CryptoBrief | AI Crypto Morning Briefing",
   description:
     "Personalized crypto morning briefings powered by SoSoValue, OpenAI, Telegram, and SoDEX.",
 };

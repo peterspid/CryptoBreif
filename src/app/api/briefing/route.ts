@@ -4,11 +4,22 @@ import { generateAiBriefing } from "@/lib/briefing";
 import { BriefingRequestSchema } from "@/lib/schemas";
 import { buildSodexFallbackContext } from "@/lib/sodex";
 import { buildMarketContext } from "@/lib/sosovalue";
+import { rateLimit } from "@/lib/route-guard";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
+    const limited = rateLimit(request, {
+      key: "briefing",
+      limit: 4,
+      windowMs: 60_000,
+    });
+
+    if (limited) {
+      return limited;
+    }
+
     const body = await request.json();
     const profile = BriefingRequestSchema.parse(body);
     let context;
@@ -18,10 +29,6 @@ export async function POST(request: Request) {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "SoSoValue request failed.";
-
-      if (!message.includes("429") && !message.toLowerCase().includes("rate")) {
-        throw error;
-      }
 
       context = await buildSodexFallbackContext(profile, message);
     }
