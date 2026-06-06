@@ -763,7 +763,7 @@ export function CryptoBriefApp() {
           <form className="briefing-panel" onSubmit={generateBriefing}>
             <div className="panel-head">
               <div>
-                <p className="eyebrow">Wave 2 console</p>
+                <p className="eyebrow">Live market console</p>
                 <h2>Build today&apos;s brief</h2>
               </div>
               <button
@@ -787,7 +787,7 @@ export function CryptoBriefApp() {
                         symbol: event.target.value.toUpperCase(),
                       })
                     }
-                    placeholder="BTC"
+                    placeholder="Symbol"
                   />
                   <input
                     aria-label="Amount"
@@ -796,7 +796,7 @@ export function CryptoBriefApp() {
                       updateHolding(index, { amount: event.target.value })
                     }
                     inputMode="decimal"
-                    placeholder="0.05"
+                    placeholder="Amount"
                   />
                   <input
                     aria-label="Cost basis"
@@ -827,10 +827,10 @@ export function CryptoBriefApp() {
               <button
                 className="text-button"
                 type="button"
-                onClick={() => setHoldings(defaultHoldings)}
+                onClick={clearHoldings}
               >
-                <RefreshCw size={16} />
-                Reset sample
+                <Trash2 size={16} />
+                Clear inputs
               </button>
             </div>
 
@@ -1229,7 +1229,7 @@ export function CryptoBriefApp() {
                       symbol: event.target.value.toUpperCase(),
                     }))
                   }
-                  placeholder="BTC"
+                  placeholder="Symbol"
                 />
                 <input
                   aria-label="Order quantity"
