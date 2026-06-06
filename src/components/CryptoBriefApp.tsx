@@ -694,7 +694,7 @@ export function CryptoBriefApp() {
     <main className="app-shell">
       <section className="hero-section" id="compose">
         <Image
-          src="/briefing-signal.png"
+          src="/hero-market-console.png"
           alt=""
           fill
           priority
