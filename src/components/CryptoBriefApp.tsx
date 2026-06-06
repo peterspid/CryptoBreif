@@ -596,19 +596,22 @@ export function CryptoBriefApp() {
   async function askFollowUp(event: FormEvent) {
     event.preventDefault();
 
-    if (!question.trim()) {
+    const trimmedQuestion = question.trim();
+
+    if (!trimmedQuestion) {
       return;
     }
 
     setLoading(true);
     setStatus("Asking the briefing assistant...");
+    setLastQuestion(trimmedQuestion);
 
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          question,
+          question: trimmedQuestion,
           previousBriefing: briefing?.briefing.text,
           portfolio: payload,
         }),
@@ -1410,23 +1413,74 @@ export function CryptoBriefApp() {
         </div>
       </section>
 
-      <section className="chat-section">
-        <div>
-          <p className="eyebrow">Follow-up</p>
-          <h2>Ask the morning bot</h2>
+      <section className="chat-section" id="assistant">
+        <div className="chat-shell">
+          <div className="chat-intro">
+            <div>
+              <p className="eyebrow">Follow-up assistant</p>
+              <h2>Ask the morning bot</h2>
+            </div>
+            <div className="chat-prompts" aria-label="Suggested follow-up prompts">
+              {followUpPrompts.map((prompt) => (
+                <button
+                  className="chat-prompt"
+                  key={prompt}
+                  type="button"
+                  onClick={() => setQuestion(prompt)}
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="chat-console" aria-live="polite">
+            <div className="assistant-line">
+              <span className="assistant-avatar">
+                <MessageCircle size={19} />
+              </span>
+              <div>
+                <span>CryptoBrief AI</span>
+                <strong>
+                  {briefing
+                    ? "Ready with today's market context"
+                    : "Generate a briefing for tighter answers"}
+                </strong>
+              </div>
+            </div>
+
+            {lastQuestion ? (
+              <div className="user-question-bubble">{lastQuestion}</div>
+            ) : null}
+
+            {answer ? (
+              <div className="assistant-response">{answer}</div>
+            ) : loading && status === "Asking the briefing assistant..." ? (
+              <div className="assistant-response pending">Thinking with live context...</div>
+            ) : (
+              <div className="chat-empty">
+                Ask about risk, catalysts, unlocks, ETF flow, or the next SoDEX action.
+              </div>
+            )}
+
+            <form className="chat-form" onSubmit={askFollowUp}>
+              <input
+                aria-label="Ask follow-up question"
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+                placeholder="Should I be worried about anything today?"
+              />
+              <button
+                className="chat-submit"
+                disabled={loading || !question.trim()}
+                title="Ask follow-up"
+                type="submit"
+              >
+                <Send size={18} />
+              </button>
+            </form>
+          </div>
         </div>
-        <form className="chat-form" onSubmit={askFollowUp}>
-          <input
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            placeholder="Should I be worried about anything today?"
-          />
-          <button className="primary-button" disabled={loading} type="submit">
-            <MessageCircle size={17} />
-            Ask
-          </button>
-        </form>
-        {answer ? <div className="answer-panel">{answer}</div> : null}
       </section>
     </main>
   );
