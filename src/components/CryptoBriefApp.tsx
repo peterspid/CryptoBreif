@@ -227,6 +227,13 @@ const defaultOrderForm: OrderForm = {
   slippagePct: "0.75",
 };
 
+const followUpPrompts = [
+  "What changed my risk score?",
+  "Which unlock matters most?",
+  "What should I do on SoDEX?",
+  "Any ETF flow warning?",
+];
+
 const serviceNames: Record<string, string> = {
   sosovalue: "SoSoValue",
   ssi: "SSI",
@@ -339,6 +346,7 @@ export function CryptoBriefApp() {
   const [orderPreview, setOrderPreview] = useState<OrderPreview | null>(null);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
+  const [lastQuestion, setLastQuestion] = useState("");
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [storageReady, setStorageReady] = useState(false);
@@ -414,6 +422,7 @@ export function CryptoBriefApp() {
     setLoading(true);
     setStatus("Fetching live SoSoValue, SSI, and SoDEX data...");
     setAnswer("");
+    setLastQuestion("");
 
     try {
       const response = await fetch("/api/briefing", {
