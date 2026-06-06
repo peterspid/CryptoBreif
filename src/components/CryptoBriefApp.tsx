@@ -231,6 +231,12 @@ const followUpPrompts = [
   "Any ETF flow warning?",
 ];
 
+const storageKeys = {
+  delivery: "cryptobrief-delivery",
+  history: "cryptobrief-history-v2",
+  holdings: "cryptobrief-holdings-v2",
+};
+
 const serviceNames: Record<string, string> = {
   sosovalue: "SoSoValue",
   ssi: "SSI",
