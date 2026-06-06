@@ -362,10 +362,10 @@ export function CryptoBriefApp() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setDeliverySettings(
-        readStoredJson("cryptobrief-delivery", defaultDeliverySettings),
+        readStoredJson(storageKeys.delivery, defaultDeliverySettings),
       );
-      setHistory(readStoredJson("cryptobrief-history", []));
-      setHoldings(readStoredJson("cryptobrief-holdings", defaultHoldings));
+      setHistory(readStoredJson(storageKeys.history, []));
+      setHoldings(readStoredJson(storageKeys.holdings, defaultHoldings));
       setStorageReady(true);
     }, 0);
     refreshHealth();
@@ -380,7 +380,7 @@ export function CryptoBriefApp() {
 
   useEffect(() => {
     if (storageReady) {
-      writeStoredJson("cryptobrief-holdings", holdings);
+      writeStoredJson(storageKeys.holdings, holdings);
     }
   }, [holdings, storageReady]);
 
@@ -415,7 +415,7 @@ export function CryptoBriefApp() {
         ...current.filter((entry) => entry.id !== item.id),
       ].slice(0, 10);
 
-      writeStoredJson("cryptobrief-history", next);
+      writeStoredJson(storageKeys.history, next);
       return next;
     });
   }
@@ -669,7 +669,7 @@ export function CryptoBriefApp() {
   }
 
   function saveDeliverySettings() {
-    writeStoredJson("cryptobrief-delivery", deliverySettings);
+    writeStoredJson(storageKeys.delivery, deliverySettings);
     setStatus("Notification controls saved locally. Server cron uses env settings.");
   }
 
@@ -714,7 +714,7 @@ export function CryptoBriefApp() {
 
   function clearHistory() {
     setHistory([]);
-    window.localStorage.removeItem("cryptobrief-history");
+      window.localStorage.removeItem(storageKeys.history);
     setStatus("Local briefing history cleared.");
   }
 
