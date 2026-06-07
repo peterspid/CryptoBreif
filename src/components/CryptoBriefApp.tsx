@@ -265,7 +265,7 @@ function formatPercent(value: number | string | undefined) {
 
 function serviceLabel(value?: { ok?: boolean; configured?: boolean }) {
   if (!value) {
-    return "Unknown";
+    return "Checking";
   }
 
   if (value.configured === false) {
