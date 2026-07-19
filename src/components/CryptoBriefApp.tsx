@@ -9,6 +9,8 @@ import {
   Clock,
   Copy,
   ExternalLink,
+  Globe2,
+  Languages,
   Mail,
   MessageCircle,
   Plus,
@@ -47,6 +49,16 @@ type OrderForm = {
   slippagePct: string;
 };
 
+type MarketRegion = "global" | "china_hk";
+type ContentLanguage = "en" | "zh" | "tc";
+type EtfCountryCode = "US" | "HK";
+
+type MarketPreferences = {
+  marketRegion: MarketRegion;
+  contentLanguage: ContentLanguage;
+  timezone: string;
+};
+
 type BriefingResponse = {
   ok: boolean;
   briefing: {
@@ -61,6 +73,13 @@ type BriefingResponse = {
   };
   context: {
     generatedAt: string;
+    marketProfile: {
+      region: MarketRegion;
+      label: string;
+      newsLanguage: ContentLanguage;
+      etfCountryCode: EtfCountryCode;
+      timezone: string;
+    };
     portfolio: {
       valueUsd: number;
       changeUsd24h: number;
@@ -130,6 +149,10 @@ type BriefingResponse = {
     }>;
     macroEvents: Array<{ date: string; events: string[] }>;
     warnings: string[];
+    sources: Array<{
+      label: string;
+      url: string;
+    }>;
   };
 };
 
@@ -205,6 +228,7 @@ const dateFormatter = new Intl.DateTimeFormat("en-US", {
 
 const emptyHolding: HoldingForm = { symbol: "", amount: "", costBasis: "" };
 const defaultHoldings: HoldingForm[] = [emptyHolding];
+const maxHoldings = 6;
 
 const defaultDeliverySettings: DeliverySettings = {
   morning: true,
@@ -212,6 +236,12 @@ const defaultDeliverySettings: DeliverySettings = {
   telegram: false,
   email: false,
   emailTo: "",
+};
+
+const defaultMarketPreferences: MarketPreferences = {
+  marketRegion: "china_hk",
+  contentLanguage: "zh",
+  timezone: "Asia/Shanghai",
 };
 
 const defaultOrderForm: OrderForm = {
@@ -235,6 +265,7 @@ const storageKeys = {
   delivery: "cryptobrief-delivery",
   history: "cryptobrief-history-v2",
   holdings: "cryptobrief-holdings-v2",
+  marketPreferences: "cryptobrief-market-v1",
 };
 
 const serviceNames: Record<string, string> = {
@@ -248,6 +279,50 @@ const serviceNames: Record<string, string> = {
 
 const sodexAppUrl =
   process.env.NEXT_PUBLIC_SODEX_APP_URL || "https://sodex.com";
+
+const marketRegionLabels: Record<MarketRegion, string> = {
+  global: "Global / US",
+  china_hk: "China / Hong Kong",
+};
+
+const contentLanguageLabels: Record<ContentLanguage, string> = {
+  en: "English",
+  zh: "Simplified Chinese",
+  tc: "Traditional Chinese",
+};
+
+function defaultLanguageForRegion(region: MarketRegion): ContentLanguage {
+  return region === "china_hk" ? "zh" : "en";
+}
+
+function etfCountryForRegion(region: MarketRegion): EtfCountryCode {
+  return region === "china_hk" ? "HK" : "US";
+}
+
+function timezoneForRegion(region: MarketRegion) {
+  return region === "china_hk" ? "Asia/Shanghai" : "UTC";
+}
+
+function normalizeMarketPreferences(
+  value: Partial<MarketPreferences> | undefined,
+): MarketPreferences {
+  const region =
+    value?.marketRegion === "global" || value?.marketRegion === "china_hk"
+      ? value.marketRegion
+      : defaultMarketPreferences.marketRegion;
+  const language =
+    value?.contentLanguage === "en" ||
+    value?.contentLanguage === "zh" ||
+    value?.contentLanguage === "tc"
+      ? value.contentLanguage
+      : defaultLanguageForRegion(region);
+
+  return {
+    marketRegion: region,
+    contentLanguage: language,
+    timezone: value?.timezone?.trim() || timezoneForRegion(region),
+  };
+}
 
 function formatMoney(value: number | string | undefined) {
   const parsed = Number(value ?? 0);
@@ -346,9 +421,27 @@ function writeStoredJson<T>(key: string, value: T) {
   }
 }
 
+function payloadHoldings(holdings: HoldingForm[]) {
+  return holdings
+    .filter((holding) => holding.symbol.trim() && holding.amount.trim())
+    .slice(0, maxHoldings)
+    .map((holding) => ({
+      symbol: holding.symbol,
+      amount: holding.amount,
+      costBasis: holding.costBasis,
+    }));
+}
+
 export function CryptoBriefApp() {
   const [holdings, setHoldings] = useState<HoldingForm[]>(defaultHoldings);
   const [deliveryTime, setDeliveryTime] = useState("07:00");
+  const [marketRegion, setMarketRegion] = useState<MarketRegion>(
+    defaultMarketPreferences.marketRegion,
+  );
+  const [contentLanguage, setContentLanguage] = useState<ContentLanguage>(
+    defaultMarketPreferences.contentLanguage,
+  );
+  const [timezone, setTimezone] = useState(defaultMarketPreferences.timezone);
   const [riskTolerance, setRiskTolerance] = useState<
     "conservative" | "balanced" | "aggressive"
   >("balanced");
@@ -370,10 +463,64 @@ export function CryptoBriefApp() {
   const [loading, setLoading] = useState(false);
   const [storageReady, setStorageReady] = useState(false);
 
-  const timezone = useMemo(
-    () => Intl.DateTimeFormat().resolvedOptions().timeZone || "Asia/Calcutta",
-    [],
+  const activeMarketProfile = useMemo(
+    () => ({
+      region: marketRegion,
+      label: marketRegionLabels[marketRegion],
+      newsLanguage: contentLanguage,
+      etfCountryCode: etfCountryForRegion(marketRegion),
+      timezone,
+    }),
+    [contentLanguage, marketRegion, timezone],
   );
+
+  const visibleHoldingCount = payloadHoldings(holdings).length;
+
+  const sourceAuditRows = briefing
+    ? [
+        {
+          label: "Region",
+          value: briefing.context.marketProfile.label,
+          detail: briefing.context.marketProfile.timezone,
+        },
+        {
+          label: "News",
+          value: contentLanguageLabels[briefing.context.marketProfile.newsLanguage],
+          detail: "SoSoValue /news",
+        },
+        {
+          label: "ETF",
+          value: `${briefing.context.marketProfile.etfCountryCode} flows`,
+          detail: "/etfs/summary-history",
+        },
+        {
+          label: "Portfolio",
+          value: `${briefing.context.portfolio.holdings.length}/${maxHoldings}`,
+          detail: "rate-safe assets",
+        },
+      ]
+    : [
+        {
+          label: "Region",
+          value: activeMarketProfile.label,
+          detail: activeMarketProfile.timezone,
+        },
+        {
+          label: "News",
+          value: contentLanguageLabels[activeMarketProfile.newsLanguage],
+          detail: "selected language",
+        },
+        {
+          label: "ETF",
+          value: `${activeMarketProfile.etfCountryCode} flows`,
+          detail: "selected market",
+        },
+        {
+          label: "Portfolio",
+          value: `${visibleHoldingCount}/${maxHoldings}`,
+          detail: "ready assets",
+        },
+      ];
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -381,7 +528,21 @@ export function CryptoBriefApp() {
         readStoredJson(storageKeys.delivery, defaultDeliverySettings),
       );
       setHistory(readStoredJson(storageKeys.history, []));
-      setHoldings(readStoredJson(storageKeys.holdings, defaultHoldings));
+      setHoldings(
+        readStoredJson(storageKeys.holdings, defaultHoldings).slice(
+          0,
+          maxHoldings,
+        ),
+      );
+      const savedMarket = normalizeMarketPreferences(
+        readStoredJson<Partial<MarketPreferences> | undefined>(
+          storageKeys.marketPreferences,
+          defaultMarketPreferences,
+        ),
+      );
+      setMarketRegion(savedMarket.marketRegion);
+      setContentLanguage(savedMarket.contentLanguage);
+      setTimezone(savedMarket.timezone);
       setStorageReady(true);
     }, 0);
     refreshHealth();
@@ -400,16 +561,23 @@ export function CryptoBriefApp() {
     }
   }, [holdings, storageReady]);
 
+  useEffect(() => {
+    if (storageReady) {
+      writeStoredJson(storageKeys.marketPreferences, {
+        marketRegion,
+        contentLanguage,
+        timezone,
+      });
+    }
+  }, [contentLanguage, marketRegion, storageReady, timezone]);
+
   const payload = {
-    holdings: holdings
-      .filter((holding) => holding.symbol.trim() && holding.amount.trim())
-      .map((holding) => ({
-        symbol: holding.symbol,
-        amount: holding.amount,
-        costBasis: holding.costBasis,
-      })),
+    holdings: payloadHoldings(holdings),
     deliveryTime,
     timezone,
+    marketRegion,
+    contentLanguage,
+    etfCountryCode: activeMarketProfile.etfCountryCode,
     telegramChatId,
     riskTolerance,
     interests: ["etf", "news", "macro", "sodex", "unlock"] as const,
@@ -445,7 +613,7 @@ export function CryptoBriefApp() {
     }
 
     setLoading(true);
-    setStatus("Fetching live SoSoValue, SSI, and SoDEX data...");
+    setStatus(`Fetching ${activeMarketProfile.label} SoSoValue, SSI, and SoDEX data...`);
     setAnswer("");
     setLastQuestion("");
 
@@ -672,6 +840,11 @@ export function CryptoBriefApp() {
   }
 
   function addHolding() {
+    if (holdings.length >= maxHoldings) {
+      setStatus(`CryptoBrief supports ${maxHoldings} live assets per briefing.`);
+      return;
+    }
+
     setHoldings((current) => [...current, { ...emptyHolding }]);
   }
 
@@ -689,9 +862,31 @@ export function CryptoBriefApp() {
     setStatus("Notification controls saved locally. Server cron uses env settings.");
   }
 
+  function hydrateStoredBriefing(response: BriefingResponse): BriefingResponse {
+    const context = response.context as BriefingResponse["context"] & {
+      marketProfile?: BriefingResponse["context"]["marketProfile"];
+      sources?: BriefingResponse["context"]["sources"];
+    };
+
+    return {
+      ...response,
+      context: {
+        ...context,
+        marketProfile: context.marketProfile ?? {
+          region: activeMarketProfile.region,
+          label: activeMarketProfile.label,
+          newsLanguage: activeMarketProfile.newsLanguage,
+          etfCountryCode: activeMarketProfile.etfCountryCode,
+          timezone: activeMarketProfile.timezone,
+        },
+        sources: context.sources ?? [],
+      },
+    };
+  }
+
   function restoreHistoryItem(item: HistoryItem) {
     if (item.response) {
-      setBriefing(item.response);
+      setBriefing(hydrateStoredBriefing(item.response));
       setStatus("History item loaded.");
       return;
     }
@@ -710,6 +905,13 @@ export function CryptoBriefApp() {
       },
       context: {
         generatedAt: item.generatedAt,
+        marketProfile: {
+          region: activeMarketProfile.region,
+          label: activeMarketProfile.label,
+          newsLanguage: activeMarketProfile.newsLanguage,
+          etfCountryCode: activeMarketProfile.etfCountryCode,
+          timezone: activeMarketProfile.timezone,
+        },
         portfolio: {
           valueUsd: item.valueUsd,
           changeUsd24h: 0,
@@ -723,6 +925,7 @@ export function CryptoBriefApp() {
         unlocks: [],
         macroEvents: [],
         warnings: ["Loaded from local briefing history."],
+        sources: [],
       },
     });
     setStatus("History item loaded.");
@@ -730,8 +933,14 @@ export function CryptoBriefApp() {
 
   function clearHistory() {
     setHistory([]);
-      window.localStorage.removeItem(storageKeys.history);
+    window.localStorage.removeItem(storageKeys.history);
     setStatus("Local briefing history cleared.");
+  }
+
+  function updateMarketRegion(nextRegion: MarketRegion) {
+    setMarketRegion(nextRegion);
+    setContentLanguage(defaultLanguageForRegion(nextRegion));
+    setTimezone(timezoneForRegion(nextRegion));
   }
 
   const firstSodexAction = briefing?.context.sodexActions[0];
@@ -752,7 +961,10 @@ export function CryptoBriefApp() {
           <div className="brand-stack">
             <div className="signal-pill">
               <Radio size={16} />
-              <span>SoSoValue + SSI + SoDEX</span>
+              <span>
+                {activeMarketProfile.newsLanguage.toUpperCase()} news +{" "}
+                {activeMarketProfile.etfCountryCode} ETF + SoDEX
+              </span>
             </div>
             <h1>CryptoBrief</h1>
             <p>Morning intelligence for the portfolio you actually hold.</p>
@@ -842,7 +1054,12 @@ export function CryptoBriefApp() {
             </div>
 
             <div className="inline-actions">
-              <button className="text-button" type="button" onClick={addHolding}>
+              <button
+                className="text-button"
+                disabled={holdings.length >= maxHoldings}
+                type="button"
+                onClick={addHolding}
+              >
                 <Plus size={17} />
                 Add asset
               </button>
@@ -854,6 +1071,36 @@ export function CryptoBriefApp() {
                 <Trash2 size={16} />
                 Clear inputs
               </button>
+            </div>
+
+            <div className="field-grid">
+              <label>
+                <Globe2 size={15} />
+                <span>Market</span>
+                <select
+                  value={marketRegion}
+                  onChange={(event) =>
+                    updateMarketRegion(event.target.value as MarketRegion)
+                  }
+                >
+                  <option value="china_hk">China / Hong Kong</option>
+                  <option value="global">Global / US</option>
+                </select>
+              </label>
+              <label>
+                <Languages size={15} />
+                <span>News language</span>
+                <select
+                  value={contentLanguage}
+                  onChange={(event) =>
+                    setContentLanguage(event.target.value as ContentLanguage)
+                  }
+                >
+                  <option value="zh">Simplified Chinese</option>
+                  <option value="tc">Traditional Chinese</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
             </div>
 
             <div className="wallet-import">
@@ -931,7 +1178,8 @@ export function CryptoBriefApp() {
                 <span>Timezone</span>
                 <input
                   value={timezone}
-                  readOnly
+                  onChange={(event) => setTimezone(event.target.value)}
+                  placeholder="Asia/Shanghai"
                 />
               </label>
             </div>
@@ -1035,6 +1283,14 @@ export function CryptoBriefApp() {
           <div className="metric-row">
             <span>Data</span>
             <strong>{briefing?.briefing.dataQuality ?? "waiting"}</strong>
+          </div>
+          <div className="metric-row">
+            <span>Market</span>
+            <strong>
+              {briefing
+                ? `${briefing.context.marketProfile.label} / ${briefing.context.marketProfile.newsLanguage.toUpperCase()}`
+                : `${activeMarketProfile.label} / ${activeMarketProfile.newsLanguage.toUpperCase()}`}
+            </strong>
           </div>
         </div>
       </section>
@@ -1162,7 +1418,12 @@ export function CryptoBriefApp() {
             <div className="signal-list">
               {(briefing?.context.etfs ?? []).slice(0, 4).map((etf) => (
                 <div key={`${etf.symbol}-${etf.date}`} className="signal-row">
-                  <span>{etf.symbol} ETF</span>
+                  <span>
+                    {etf.symbol}{" "}
+                    {briefing?.context.marketProfile.etfCountryCode ??
+                      activeMarketProfile.etfCountryCode}{" "}
+                    ETF
+                  </span>
                   <strong>{formatMoney(etf.total_net_inflow)}</strong>
                   <em>{etf.date}</em>
                 </div>
@@ -1174,6 +1435,35 @@ export function CryptoBriefApp() {
                 </div>
               ))}
               {!briefing ? <p className="muted">Signals load after briefing.</p> : null}
+            </div>
+          </div>
+
+          <div className="data-panel">
+            <div className="panel-head tight">
+              <h3>Source audit</h3>
+              <ShieldCheck size={17} />
+            </div>
+            <div className="signal-list">
+              {sourceAuditRows.map((row) => (
+                <div className="signal-row" key={row.label}>
+                  <span>{row.label}</span>
+                  <strong>{row.value}</strong>
+                  <em>{row.detail}</em>
+                </div>
+              ))}
+              {(briefing?.context.sources ?? []).slice(0, 3).map((source) => (
+                <a
+                  className="signal-row action-link"
+                  href={source.url}
+                  key={source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <span>Source</span>
+                  <strong>{source.label}</strong>
+                  <em>docs</em>
+                </a>
+              ))}
             </div>
           </div>
 

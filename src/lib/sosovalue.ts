@@ -1,6 +1,6 @@
-import { addDays, isAfter, isBefore, parseISO } from "date-fns";
 import { env, requireSecret } from "./env";
 import { stripHtml, truncate } from "./format";
+import { resolveMarketProfile } from "./market-profile";
 import {
   buildSodexActions,
   buildSodexFallbackHoldings,
@@ -8,10 +8,11 @@ import {
   getSodexSpotTickers,
 } from "./sodex";
 import type {
-  CurrencyInfo,
   CurrencyListItem,
   CurrencySnapshot,
+  ContentLanguage,
   EnrichedHolding,
+  EtfCountryCode,
   EtfSummary,
   IndexSummary,
   MacroEventDay,
@@ -51,9 +52,11 @@ const ETF_SUPPORTED_SYMBOLS = new Set([
 const ETF_SUPPORTED_SYMBOL_LIST = Array.from(ETF_SUPPORTED_SYMBOLS).join(", ");
 const MAX_NEWS_ASSET_LOOKUPS = 2;
 const MAX_ETF_SYMBOLS = 2;
-const MAX_INDEX_CONSTITUENT_LOOKUPS = 3;
+const MAX_INDEX_CONSTITUENT_LOOKUPS = 2;
 const MAX_INDEX_SNAPSHOTS = 2;
 const MAX_TOKEN_UNLOCK_LOOKUPS = 2;
+const MAX_SOSO_ATTEMPTS = 4;
+const MAX_SOSO_RETRY_MS = 12_000;
 
 type IndexConstituent = {
   currency_id: string;
@@ -97,6 +100,27 @@ let indexListCache:
       tickers: string[];
     }
   | undefined;
+const currencySnapshotCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    snapshot: CurrencySnapshot;
+  }
+>();
+const tokenEconomicsCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    economics: TokenEconomics;
+  }
+>();
+const newsCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    news: NewsItem[];
+  }
+>();
 const indexConstituentCache = new Map<
   string,
   {
@@ -137,6 +161,48 @@ function unwrapSoso<T>(payload: T | ApiEnvelope<T>) {
   return payload as T;
 }
 
+function parseJson(raw: string) {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function retryDelayMs(response: Response, payload: unknown, attempt: number) {
+  const retryAfter = Number(response.headers.get("retry-after"));
+
+  if (Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.min(retryAfter * 1000, MAX_SOSO_RETRY_MS);
+  }
+
+  const resetAt = Number(response.headers.get("x-ratelimit-reset"));
+
+  if (Number.isFinite(resetAt) && resetAt > Date.now()) {
+    return Math.min(resetAt - Date.now(), MAX_SOSO_RETRY_MS);
+  }
+
+  const bodyRetryAfter =
+    payload &&
+    typeof payload === "object" &&
+    "details" in payload &&
+    payload.details &&
+    typeof payload.details === "object" &&
+    "retry_after" in payload.details
+      ? Number(payload.details.retry_after)
+      : undefined;
+
+  if (bodyRetryAfter && Number.isFinite(bodyRetryAfter)) {
+    return Math.min(bodyRetryAfter * 1000, MAX_SOSO_RETRY_MS);
+  }
+
+  return Math.min(1000 * 2 ** attempt, MAX_SOSO_RETRY_MS);
+}
+
 async function sosoFetch<T>(
   path: string,
   params: Record<string, string | number | undefined> = {},
@@ -151,8 +217,10 @@ async function sosoFetch<T>(
   });
 
   let response: Response | undefined;
+  let raw = "";
+  let json: unknown = null;
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_SOSO_ATTEMPTS; attempt += 1) {
     response = await fetch(url, {
       cache: "no-store",
       headers: {
@@ -160,29 +228,35 @@ async function sosoFetch<T>(
         "x-soso-api-key": apiKey,
       },
     });
+    raw = await response.text();
+    json = parseJson(raw);
 
-    if (response.status !== 429) {
+    if (response.status !== 429 || attempt === MAX_SOSO_ATTEMPTS - 1) {
       break;
     }
 
-    await new Promise((resolve) =>
-      setTimeout(resolve, 1000 * 2 ** attempt),
-    );
+    const delay = retryDelayMs(response, json, attempt);
+    await new Promise((resolve) => setTimeout(resolve, delay));
   }
 
   if (!response) {
     throw new Error("SoSoValue request did not start.");
   }
 
-  const raw = await response.text();
-  const json = raw ? JSON.parse(raw) : null;
-
   if (!response.ok) {
+    const fallbackMessage =
+      raw && raw.trim()
+        ? truncate(stripHtml(raw), 240)
+        : response.statusText || "Request failed.";
     const message =
       json && typeof json === "object" && "message" in json
         ? String(json.message)
-        : raw;
+        : fallbackMessage;
     throw new Error(`SoSoValue ${response.status}: ${message}`);
+  }
+
+  if (json === null) {
+    throw new Error("SoSoValue returned an empty or invalid JSON response.");
   }
 
   return unwrapSoso<T>(json as T | ApiEnvelope<T>);
@@ -214,22 +288,40 @@ async function resolveCurrencies(holdings: HoldingInput[]) {
   }));
 }
 
-async function getCurrencyInfo(currencyId: string) {
-  try {
-    return await sosoFetch<CurrencyInfo>(`/currencies/${currencyId}`);
-  } catch {
-    return undefined;
-  }
-}
-
 async function getCurrencySnapshot(currencyId: string) {
-  return sosoFetch<CurrencySnapshot>(
+  const cached = currencySnapshotCache.get(currencyId);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.snapshot;
+  }
+
+  const snapshot = await sosoFetch<CurrencySnapshot>(
     `/currencies/${currencyId}/market-snapshot`,
   );
+  currencySnapshotCache.set(currencyId, {
+    expiresAt: Date.now() + 30_000,
+    snapshot,
+  });
+
+  return snapshot;
 }
 
 async function getTokenEconomics(currencyId: string) {
-  return sosoFetch<TokenEconomics>(`/currencies/${currencyId}/token-economics`);
+  const cached = tokenEconomicsCache.get(currencyId);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.economics;
+  }
+
+  const economics = await sosoFetch<TokenEconomics>(
+    `/currencies/${currencyId}/token-economics`,
+  );
+  tokenEconomicsCache.set(currencyId, {
+    expiresAt: Date.now() + 5 * 60_000,
+    economics,
+  });
+
+  return economics;
 }
 
 function aggregateHoldings(holdings: HoldingInput[]) {
@@ -270,10 +362,7 @@ async function enrichHolding(
     await new Promise((resolve) => setTimeout(resolve, index * 120));
   }
 
-  const [snapshot, info] = await Promise.all([
-    getCurrencySnapshot(currency.currency_id),
-    getCurrencyInfo(currency.currency_id),
-  ]);
+  const snapshot = await getCurrencySnapshot(currency.currency_id);
   const price = Number(snapshot.price ?? 0);
   const changePct24h = Number(snapshot.change_pct_24h ?? 0);
   const valueUsd = holding.amount * price;
@@ -286,9 +375,8 @@ async function enrichHolding(
     amount: holding.amount,
     costBasis: holding.costBasis,
     currencyId: currency.currency_id,
-    name: info?.name ?? currency.name,
-    icon: info?.icon,
-    sectors: info?.sector?.map((sector) => sector.name).filter(Boolean) ?? [],
+    name: currency.name,
+    sectors: [],
     price,
     changePct24h,
     valueUsd,
@@ -301,15 +389,23 @@ async function enrichHolding(
   };
 }
 
-async function getAssetNews(currencyIds: string[]) {
+async function getAssetNews(currencyIds: string[], language: ContentLanguage) {
   const startTime = Date.now() - 8 * 60 * 60 * 1000;
   const endTime = Date.now();
+  const cacheKey = `${language}:${currencyIds
+    .slice(0, MAX_NEWS_ASSET_LOOKUPS)
+    .join(",")}`;
+  const cached = newsCache.get(cacheKey);
+
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.news;
+  }
 
   const results = await Promise.allSettled(
     currencyIds.slice(0, MAX_NEWS_ASSET_LOOKUPS).map((currencyId) =>
       sosoFetch<Paginated<NewsItem>>("/news", {
         currency_id: currencyId,
-        language: "en",
+        language,
         page: 1,
         page_size: 8,
         start_time: startTime,
@@ -323,19 +419,31 @@ async function getAssetNews(currencyIds: string[]) {
   );
 
   if (news.length > 0) {
-    return dedupeNews(news);
+    const deduped = dedupeNews(news);
+    newsCache.set(cacheKey, {
+      expiresAt: Date.now() + 30_000,
+      news: deduped,
+    });
+
+    return deduped;
   }
 
   try {
     const globalNews = await sosoFetch<Paginated<NewsItem>>("/news", {
-      language: "en",
+      language,
       page: 1,
       page_size: 12,
       start_time: startTime,
       end_time: endTime,
     });
 
-    return dedupeNews(globalNews.list ?? []);
+    const deduped = dedupeNews(globalNews.list ?? []);
+    newsCache.set(cacheKey, {
+      expiresAt: Date.now() + 30_000,
+      news: deduped,
+    });
+
+    return deduped;
   } catch {
     return [];
   }
@@ -363,7 +471,11 @@ function dedupeNews(news: NewsItem[]) {
     }));
 }
 
-async function getEtfSummaries(symbols: string[], warnings: string[]) {
+async function getEtfSummaries(
+  symbols: string[],
+  warnings: string[],
+  countryCode: EtfCountryCode,
+) {
   const etfSymbols = Array.from(
     new Set(
       symbols
@@ -379,7 +491,7 @@ async function getEtfSummaries(symbols: string[], warnings: string[]) {
         "/etfs/summary-history",
         {
           symbol,
-          country_code: "US",
+          country_code: countryCode,
           limit: 5,
         },
       );
@@ -398,11 +510,11 @@ async function getEtfSummaries(symbols: string[], warnings: string[]) {
     warnings.push(
       `ETF flow lookup failed for ${failedSymbols.join(
         ", ",
-      )}. Supported ETF assets are ${ETF_SUPPORTED_SYMBOL_LIST}.`,
+      )} in ${countryCode}. Supported ETF assets are ${ETF_SUPPORTED_SYMBOL_LIST}.`,
     );
   }
 
-  return rows;
+  return rows.sort((a, b) => b.date.localeCompare(a.date));
 }
 
 async function getIndexList() {
@@ -649,15 +761,15 @@ async function getMacroEvents() {
   try {
     const rows = await sosoFetch<MacroEventDay[]>("/macro/events");
     const today = new Date();
-    const horizon = addDays(today, 7);
+    const todayUtc = new Date(
+      Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
+    );
+    const horizon = new Date(todayUtc.getTime() + 7 * 24 * 60 * 60 * 1000);
 
     return rows
       .filter((row) => {
-        const date = parseISO(row.date);
-        return (
-          (isAfter(date, today) || row.date === today.toISOString().slice(0, 10)) &&
-          isBefore(date, horizon)
-        );
+        const date = new Date(`${row.date}T00:00:00Z`);
+        return date >= todayUtc && date < horizon;
       })
       .slice(0, 5);
   } catch {
@@ -669,6 +781,7 @@ export async function buildMarketContext(
   request: BriefingRequest,
 ): Promise<MarketContext> {
   const warnings: string[] = [];
+  const marketProfile = resolveMarketProfile(request);
   const aggregated = aggregateHoldings(request.holdings);
   const resolved = await resolveCurrencies(aggregated);
   const matchedItems = resolved.filter(
@@ -796,10 +909,12 @@ export async function buildMarketContext(
       holdings
         .filter((holding) => holding.dataSource === "sosovalue")
         .map((holding) => holding.currencyId),
+      marketProfile.newsLanguage,
     ),
     getEtfSummaries(
       holdings.map((holding) => holding.symbol),
       warnings,
+      marketProfile.etfCountryCode,
     ),
     getPortfolioIndexes(holdings.map((holding) => holding.symbol), warnings),
     getTokenUnlocks(holdings, warnings),
@@ -817,6 +932,7 @@ export async function buildMarketContext(
 
   return {
     generatedAt: new Date().toISOString(),
+    marketProfile,
     request,
     portfolio: {
       valueUsd,

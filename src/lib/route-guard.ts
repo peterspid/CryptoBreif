@@ -15,6 +15,7 @@ type Bucket = {
 };
 
 const buckets = new Map<string, Bucket>();
+const MAX_BUCKETS_BEFORE_PRUNE = 1000;
 
 class RouteGuardError extends Error {
   status = 403;
@@ -36,6 +37,15 @@ function clientKey(request: Request) {
 export function rateLimit(request: Request, options: RateLimitOptions) {
   const now = Date.now();
   const key = `${options.key}:${clientKey(request)}`;
+
+  if (buckets.size > MAX_BUCKETS_BEFORE_PRUNE) {
+    for (const [bucketKey, bucket] of buckets) {
+      if (bucket.resetAt <= now) {
+        buckets.delete(bucketKey);
+      }
+    }
+  }
+
   const current = buckets.get(key);
 
   if (!current || current.resetAt <= now) {

@@ -37,6 +37,8 @@ function parseBriefCommand(text: string) {
     holdings,
     deliveryTime: "07:00",
     timezone: env.scheduledBriefingTimezone,
+    marketRegion: env.scheduledBriefingMarketRegion,
+    contentLanguage: env.scheduledBriefingLanguage,
     riskTolerance: "balanced",
     interests: ["etf", "news", "macro", "sodex", "unlock"],
   });

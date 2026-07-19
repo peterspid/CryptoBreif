@@ -10,6 +10,26 @@ import { checkTelegramHealth } from "@/lib/telegram";
 
 export const runtime = "nodejs";
 
+const HEALTH_CHECK_TIMEOUT_MS = 8_000;
+
+function withHealthTimeout<T>(label: string, promise: Promise<T>) {
+  let timeout: ReturnType<typeof setTimeout>;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(
+        new Error(
+          `${label} health check timed out after ${HEALTH_CHECK_TIMEOUT_MS / 1000}s.`,
+        ),
+      );
+    }, HEALTH_CHECK_TIMEOUT_MS);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() =>
+    clearTimeout(timeout),
+  );
+}
+
 export async function GET(request: Request) {
   const limited = rateLimit(request, {
     key: "health",
@@ -22,11 +42,11 @@ export async function GET(request: Request) {
   }
 
   const [soso, openai, sodex, telegram, email] = await Promise.allSettled([
-    checkSosoHealth(),
-    checkOpenAiHealth(),
-    getSodexHealth(),
-    checkTelegramHealth(),
-    checkEmailHealth(),
+    withHealthTimeout("SoSoValue", checkSosoHealth()),
+    withHealthTimeout("OpenAI", checkOpenAiHealth()),
+    withHealthTimeout("SoDEX", getSodexHealth()),
+    withHealthTimeout("Telegram", checkTelegramHealth()),
+    withHealthTimeout("Email", checkEmailHealth()),
   ]);
   const sosoService =
     soso.status === "fulfilled"

@@ -1,5 +1,3 @@
-import { format } from "date-fns";
-
 export function compactMoney(value: number | null | undefined) {
   if (value === null || value === undefined || Number.isNaN(value)) {
     return "n/a";
@@ -49,7 +47,11 @@ export function stripHtml(html: string | null | undefined) {
 }
 
 export function todayLine(date = new Date()) {
-  return format(date, "EEEE, MMMM d");
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(date);
 }
 
 export function truncate(value: string, length = 220) {

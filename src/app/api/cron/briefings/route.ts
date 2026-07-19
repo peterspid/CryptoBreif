@@ -50,6 +50,8 @@ function profileFromEnv(slot: string) {
         ? env.scheduledBriefingEveningTime
         : env.scheduledBriefingMorningTime,
     timezone: env.scheduledBriefingTimezone,
+    marketRegion: env.scheduledBriefingMarketRegion,
+    contentLanguage: env.scheduledBriefingLanguage,
     riskTolerance: "balanced",
     interests: ["etf", "news", "macro", "sodex", "unlock"],
   });

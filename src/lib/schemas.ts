@@ -23,6 +23,10 @@ const walletAddress = z
   .trim()
   .regex(/^0x[a-fA-F0-9]{40}$/, "Enter a valid EVM wallet address");
 
+const MarketRegionSchema = z.enum(["global", "china_hk"]);
+const ContentLanguageSchema = z.enum(["en", "zh", "tc"]);
+const EtfCountryCodeSchema = z.enum(["US", "HK"]);
+
 export const HoldingSchema = z.object({
   symbol: z
     .string()
@@ -35,9 +39,15 @@ export const HoldingSchema = z.object({
 });
 
 export const BriefingRequestSchema = z.object({
-  holdings: z.array(HoldingSchema).min(1, "Add at least one portfolio asset"),
+  holdings: z
+    .array(HoldingSchema)
+    .min(1, "Add at least one portfolio asset")
+    .max(6, "Keep each live briefing to 6 assets so SoSoValue rate limits stay safe."),
   deliveryTime: z.string().trim().min(1).default("07:00"),
-  timezone: z.string().trim().min(1).default("Asia/Calcutta"),
+  timezone: z.string().trim().min(1).default("Asia/Shanghai"),
+  marketRegion: MarketRegionSchema.default("china_hk"),
+  contentLanguage: ContentLanguageSchema.optional(),
+  etfCountryCode: EtfCountryCodeSchema.optional(),
   telegramChatId: z.string().trim().optional().or(z.literal("")),
   telegramHandle: z.string().trim().optional().or(z.literal("")),
   riskTolerance: z
@@ -45,7 +55,7 @@ export const BriefingRequestSchema = z.object({
     .default("balanced"),
   interests: z
     .array(z.enum(["etf", "news", "macro", "sodex", "unlock"]))
-    .default(["etf", "news", "macro", "sodex"]),
+    .default(["etf", "news", "macro", "sodex", "unlock"]),
 });
 
 export const ChatRequestSchema = z.object({

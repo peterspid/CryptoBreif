@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { env } from "./env";
 import { publicErrorMessage } from "./errors";
 import { compactMoney, money, percent, todayLine } from "./format";
+import { contentLanguageName } from "./market-profile";
 import type { BriefingResult, EnrichedHolding, MarketContext } from "./types";
 
 function holdingLine(holding: EnrichedHolding) {
@@ -103,6 +104,12 @@ function sodexLine(context: MarketContext) {
   )}; signed SoDEX order flow is required before execution.`;
 }
 
+function marketProfileLine(context: MarketContext) {
+  return `${context.marketProfile.label}, ${contentLanguageName(
+    context.marketProfile.newsLanguage,
+  )} news, ${context.marketProfile.etfCountryCode} ETF flows, ${context.marketProfile.timezone}.`;
+}
+
 function dataQuality(context: MarketContext): BriefingResult["dataQuality"] {
   const hasSoSoValueHolding = context.portfolio.holdings.some(
     (holding) => holding.dataSource === "sosovalue",
@@ -137,6 +144,8 @@ export function deterministicBriefing(
 
   const text = [
     `CryptoBrief - ${todayLine()}`,
+    "",
+    `Market: ${marketProfileLine(context)}`,
     "",
     `Portfolio: ${portfolioLine}`,
     "",
@@ -177,6 +186,7 @@ export async function generateAiBriefing(context: MarketContext) {
     const client = new OpenAI({ apiKey: env.openaiApiKey });
     const compactContext = {
       generatedAt: context.generatedAt,
+      marketProfile: context.marketProfile,
       deliveryTime: context.request.deliveryTime,
       timezone: context.request.timezone,
       riskTolerance: context.request.riskTolerance,
@@ -192,8 +202,9 @@ export async function generateAiBriefing(context: MarketContext) {
 
     const response = await client.responses.create({
       model: env.openaiModel,
-      instructions:
-        "You are CryptoBrief, a concise AI crypto morning briefing assistant. Use only the supplied live market data. Do not invent prices, news, ETF flows, SoSoValue Index data, token unlocks, or trade execution. Keep the answer useful, calm, and under 220 words. It is not financial advice. Format it as clean plain text for a web preview and Telegram message: no Markdown symbols, no emoji, no tables, no inline links, no bullet characters. Use short section labels such as Portfolio:, Watch:, Bright spot:, News:, ETF flows:, SSI indexes:, Unlocks:, SoDEX:, Coming up:, Suggestion:, Actions:. For SoDEX, describe action readiness only; say signed order flow is required before execution.",
+      instructions: `You are CryptoBrief, a concise AI crypto morning briefing assistant. Use only the supplied live market data. Do not invent prices, news, ETF flows, SoSoValue Index data, token unlocks, or trade execution. Reply in ${contentLanguageName(
+        context.marketProfile.newsLanguage,
+      )}, while keeping crypto symbols, venue names, and ticker codes unchanged. Keep the answer useful, calm, and under 220 words. It is not financial advice. Format it as clean plain text for a web preview and Telegram message: no Markdown symbols, no emoji, no tables, no inline links, no bullet characters. Use short section labels. For SoDEX, describe action readiness only; say signed order flow is required before execution.`,
       input: `Create a personalized morning briefing from this JSON data:\n${JSON.stringify(
         compactContext,
       )}`,
@@ -236,8 +247,9 @@ export async function answerFollowUp(
   const client = new OpenAI({ apiKey: env.openaiApiKey });
   const response = await client.responses.create({
     model: env.openaiModel,
-    instructions:
-      "You answer follow-up questions for CryptoBrief. Use only supplied live SoSoValue, SoSoValue Index, token unlock, and SoDEX context. Be concise and cite which asset, news, ETF, index, unlock, or macro signal you are using. Format as clean plain text for a web chat: no Markdown symbols, no emoji, no tables, no bullet characters. For SoDEX, never say an unsigned order can be placed or executed. Say CryptoBrief can preview an unsigned order and the user must connect a wallet and sign before SoDEX execution.",
+    instructions: `You answer follow-up questions for CryptoBrief. Use only supplied live SoSoValue, SoSoValue Index, token unlock, and SoDEX context. Reply in ${contentLanguageName(
+      context.marketProfile.newsLanguage,
+    )}, while keeping crypto symbols, venue names, and ticker codes unchanged. Be concise and cite which asset, news, ETF, index, unlock, or macro signal you are using. Format as clean plain text for a web chat: no Markdown symbols, no emoji, no tables, no bullet characters. For SoDEX, never say an unsigned order can be placed or executed. Say CryptoBrief can preview an unsigned order and the user must connect a wallet and sign before SoDEX execution.`,
     input: JSON.stringify({
       question,
       previousBriefing,

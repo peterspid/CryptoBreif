@@ -322,6 +322,7 @@ select:focus {
 
 .field-grid label {
   display: grid;
+  min-width: 0;
   grid-template-columns: 17px 1fr;
   gap: 8px;
   align-items: center;
@@ -357,6 +358,7 @@ select:focus {
 .wallet-import label,
 .wide-field {
   display: grid;
+  min-width: 0;
   grid-template-columns: 17px 1fr;
   gap: 8px;
   align-items: center;
@@ -581,11 +583,20 @@ select:focus {
 .ticker-row,
 .signal-row {
   display: grid;
+  min-width: 0;
   min-height: 42px;
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid rgba(21, 18, 16, 0.1);
   grid-template-columns: 1fr 1fr 1fr 0.8fr;
+}
+
+.table-row > *,
+.ticker-row > *,
+.signal-row > *,
+.history-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .table-row {

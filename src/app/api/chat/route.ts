@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   try {
     const limited = rateLimit(request, {
       key: "chat",
-      limit: 8,
+      limit: 4,
       windowMs: 60_000,
     });
 

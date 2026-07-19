@@ -1,5 +1,17 @@
 import type { BriefingRequest } from "./schemas";
 
+export type MarketRegion = "global" | "china_hk";
+export type ContentLanguage = "en" | "zh" | "tc";
+export type EtfCountryCode = "US" | "HK";
+
+export type MarketProfile = {
+  region: MarketRegion;
+  label: string;
+  newsLanguage: ContentLanguage;
+  etfCountryCode: EtfCountryCode;
+  timezone: string;
+};
+
 export type CurrencyListItem = {
   currency_id: string;
   symbol: string;
@@ -151,6 +163,7 @@ export type EnrichedHolding = {
 
 export type MarketContext = {
   generatedAt: string;
+  marketProfile: MarketProfile;
   request: BriefingRequest;
   portfolio: {
     valueUsd: number;

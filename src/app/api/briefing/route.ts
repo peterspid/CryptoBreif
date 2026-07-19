@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   try {
     const limited = rateLimit(request, {
       key: "briefing",
-      limit: 4,
+      limit: 2,
       windowMs: 60_000,
     });
 

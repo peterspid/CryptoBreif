@@ -1,4 +1,6 @@
 import { env } from "./env";
+import { stripHtml, truncate } from "./format";
+import { resolveMarketProfile } from "./market-profile";
 import type {
   BriefingRequest,
   HoldingInput,
@@ -123,6 +125,32 @@ function numeric(value: string | number | undefined) {
   const parsed = Number(value ?? 0);
 
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseJson(raw: string) {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function upstreamMessage(payload: unknown, raw: string) {
+  if (payload && typeof payload === "object" && "error" in payload) {
+    return String(payload.error);
+  }
+
+  if (payload && typeof payload === "object" && "message" in payload) {
+    return String(payload.message);
+  }
+
+  return raw && raw.trim()
+    ? truncate(stripHtml(raw), 240)
+    : "Request failed.";
 }
 
 export function createUnpricedHolding(
@@ -294,17 +322,19 @@ export async function getSodexSpotTickers(symbol?: string) {
   });
 
   const raw = await response.text();
-  const payload = raw ? JSON.parse(raw) : null;
+  const payload = parseJson(raw);
 
   if (!response.ok) {
-    const message =
-      payload && typeof payload === "object" && "error" in payload
-        ? String(payload.error)
-        : raw;
-    throw new Error(`SoDEX ${response.status}: ${message}`);
+    throw new Error(`SoDEX ${response.status}: ${upstreamMessage(payload, raw)}`);
   }
 
-  const tickers = unwrap<SodexTicker[]>(payload).map(normalizeTicker);
+  if (!payload) {
+    throw new Error("SoDEX returned an empty or invalid JSON response.");
+  }
+
+  const tickers = unwrap<SodexTicker[]>(
+    payload as SodexTicker[] | SodexEnvelope<SodexTicker[]>,
+  ).map(normalizeTicker);
 
   if (!symbol) {
     tickerCache = {
@@ -335,17 +365,22 @@ export async function getSodexSpotBalances(
     },
   });
   const raw = await response.text();
-  const payload = raw ? JSON.parse(raw) : null;
+  const payload = parseJson(raw);
 
   if (!response.ok) {
-    const message =
-      payload && typeof payload === "object" && "error" in payload
-        ? String(payload.error)
-        : raw;
-    throw new Error(`SoDEX ${response.status}: ${message}`);
+    throw new Error(`SoDEX ${response.status}: ${upstreamMessage(payload, raw)}`);
   }
 
-  const data = unwrap<SpotAccountBalances | SpotBalance[]>(payload);
+  if (!payload) {
+    throw new Error("SoDEX returned an empty or invalid JSON response.");
+  }
+
+  const data = unwrap<SpotAccountBalances | SpotBalance[]>(
+    payload as
+      | SpotAccountBalances
+      | SpotBalance[]
+      | SodexEnvelope<SpotAccountBalances | SpotBalance[]>,
+  );
   const balances = Array.isArray(data) ? data : data.balances ?? data.data ?? [];
 
   return balances
@@ -421,6 +456,7 @@ export async function buildSodexFallbackContext(
 
   return {
     generatedAt: new Date().toISOString(),
+    marketProfile: resolveMarketProfile(request),
     request,
     portfolio: {
       valueUsd,
